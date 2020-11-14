@@ -1,0 +1,159 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+#run marss 
+#create residual plot
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+install.packages("kriging")
+install.packages("plotrix")
+install.packages("sp")
+install.packages("momentuHMM")
+install.packages("dlm")
+install.packages("MARSS")
+```{r}
+library(plotrix)
+library(momentuHMM)
+library(MARSS)
+library(dlm)
+library(tidyverse)
+library(lubridate)
+library(jsonlite)
+library(RColorBrewer)
+library(ggplot2)
+library(sp)
+percs <- c(0, 0.5, 0.75, 0.9, 0.95, 0.975, 1)
+cols <- brewer.pal(length(percs) - 1, "YlOrRd")
+library(ggplot2)
+library(kriging)
+setwd("~/Downloads")
+data <- read_json('gps/20200819132607.geojson',flatten=TRUE)
+data2 <- read_json('gps/20200818114606.geojson',flatten=TRUE)
+data3 <- read_json('gps/20200820151044.geojson',flatten=TRUE)
+data4 <- read_json('gps/20200821111447.geojson',flatten=TRUE)
+data5 <- read_json('gps/20200824130857.geojson',flatten=TRUE)
+data6 <- read_json('gps/20200824130857.geojson',flatten=TRUE)
+data7 <- read_json('gps/20200825121346.geojson',flatten=TRUE)
+data8 <- read_json('gps/20200827113234.geojson',flatten=TRUE)
+data9 <- read_json('gps/20200828130816.geojson',flatten=TRUE)
+
+df_data <- as.data.frame(data)
+long <- c()
+lat <- c()
+time <- c()
+for(i in 1:249) {
+  long[i] <- data[[2]][[i]]$geometry$coordinates[[1]]
+}
+for(i in 1:249) {
+  lat[i] <- data[[2]][[i]]$geometry$coordinates[[2]]
+}
+for(i in 1:249) {
+  time[i] <- data[[2]][[i]]$properties$time
+}
+
+longs <- seq(min(long), max(long), length.out=100)
+lats <- seq(min(lat), max(lat), length.out=100)
+```
+
+```{r}
+new_df <- data.frame(long,lat,time = ymd_hms(time))
+new_df_sp <- SpatialPointsDataFrame(coords=new_df[,c("long","lat")],data=new_df['time'],proj4string = CRS("+proj=utm +zone=12 +datum=WGS84 +units=m"))
+utm_df <- spTransform(new_df_sp,CRSobj = "+proj=utm +zone=12 +datum=WGS84")
+utm_coords <- coordinates(utm_df)
+
+time_f <- as.POSIXct((time))
+ggplot(new_df,aes(x=long,y=lat,color = as.numeric(time))) +
+  geom_point() +
+  scale_color_gradientn(colors=c('red','green','blue'))
+print(time)
+ggplot(new_df,aes(x=time))+
+  geom_histogram() +
+  scale_x_datetime()
+ggplot(new_df, aes(x=1:nrow(new_df), y = time)) +
+  geom_line()
+```
+
+```{r}
+coords <- SpatialPoints(new_df[,c("long","lat")],CRS("+init=epsg:3395"))
+coords.UTM <- spTransform(coords,CRS("+init=epsg:3395"))
+dupl <- zerodist(coords)
+coordDF <- data.frame(pos=coords.UTM[-dupl[,2]])
+```
+
+```{r}
+print(coordDF) 
+print(new_df$time[1])
+#new_df$rel_time <- new_df$time - new_df$time[1]
+new_df <- new_df %>%
+  mutate(time_gap_before = time - lag(time))
+new_path = which(new_df$time_gap_before > 60*2)
+new_df$path <- c(rep(1, new_path-1), rep(2, nrow(new_df) - new_path + 1))
+new_df$rel_long <- as.numeric(new_df$long - new_df$long[1])
+new_df$rel_lat <- as.numeric(new_df$lat - new_df$lat[1])
+new_df$rel_time <- as.numeric(new_df$time - new_df$time[1])
+```
+
+```{r}
+longlattime_rel$rel_long <- as.numeric(unlist(new_df[1:123,8]))
+longlattime_rel$rel_lat <- as.numeric(unlist(new_df[1:123,9]))
+longlattime_rel$rel_time <- as.numeric(unlist(new_df[1:123,4]))
+llt_rel_1 <- longlattime_rel[1:39,] 
+param_rest = function(param) {
+  return(c (param[1],exp(param[2])))
+}
+dat_t <- t(longlattime_rel)
+fit <- MARSS(dat_t,fit = TRUE)
+coef(fit)
+residuals(fit)
+kalman <- MARSSkfss(fit,smoother = TRUE)
+kal_innov <- kalman$Innov
+llt_rel_1_t <- t(longlattime_rel)
+print(llt_rel_1_t[,39])
+for(i in 1:39) {
+  if(kal_innov[3,i]>2.0e+01 | kal_innov[3,i]< -2.0e+01) {
+    kal_innov <- kal_innov[,-i]
+  }
+}
+
+kal_innov_t <- t(kal_innov)
+print(kalman_t[,2])
+
+ggplot(data.frame(kal_innov_t),aes(x=rel_long,y=rel_lat,color = as.numeric(rel_time))) +
+  geom_point() +
+  scale_color_gradientn(colors=c('red','green','blue'))
+
+lm <- lm(longlattime_rel$rel_long ~ longlattime_rel$rel_time)
+summary(lm)
+pred <- predict(lm,interval = 'prediction',level=0.95)
+pred
+
+plot1 <- ggplot(longlattime_rel,aes(x=rel_time,y=rel_long))+
+    geom_point(size=2) + 
+    geom_errorbar(aes(ymax=pred[,'upr'],ymin=pred[,'lwr']))
+
+plot(longlattime_rel$rel_long)
+plot(pred[,c("fit")])
+plot(pred[,c("fit")]-longlattime_rel$rel_long[2:123])
+print(pred[,c("fit")]-longlattime_rel$rel_long[2:123])
+print(lat)
+
+print(pred[3,'upr'])
+
+plotCI(longlattime_rel$rel_long,longlattime_rel$rel_time,ui=pred[,'upr'],li=pred[,'lwr'])
+
+print(pred[,'lwr'])
+print(longs)
+
+
+#buildFun <- function(x) {
+#  dlmModPoly(order=1,dV=exp(x[1]),dW=exp(x[2]))
+#}
+#print(rep(0,4))
+#fit <- dlmMLE(longlat_rel,rep(0,2),build=buildFun)
+#d <- moveHMM::prepData(longlat_rel, type = "LL", coordNames = c("rel_long", "rel_lat"))
+#?prepData
+```
+
